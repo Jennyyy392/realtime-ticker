@@ -7,8 +7,9 @@
 
 import asyncio
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, WebSocketException
 
+from app.api.v1.dependencies import check_rate_limit
 from app.core.logger import logger
 from app.redis_client import redis_client
 
@@ -24,7 +25,10 @@ MESSAGE_TIMEOUT = 1.0
 
 
 @router.websocket("/ws/prices")
-async def websocket_prices(websocket: WebSocket) -> None:
+async def websocket_prices(
+    websocket: WebSocket,
+    rate_limit: None = Depends(check_rate_limit),
+) -> None:
     """Транслирует обновления цен клиенту через WebSocket."""
     await websocket.accept()
     logger.info("WebSocket клиент подключён", channel=PRICE_UPDATES_CHANNEL)
