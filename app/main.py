@@ -43,16 +43,3 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await worker_task
     except asyncio.CancelledError:
         logger.info("Фоновая задача воркера цен отменена")
-
-    await redis_client.close()
-    logger.info("Приложение остановлено")
-
-
-# Создание приложения FastAPI
-app = FastAPI(title="RealTimeTicker", debug=settings.DEBUG, lifespan=lifespan)
-
-# Регистрация глобального обработчика всех необработанных исключений
-app.add_exception_handler(Exception, global_exception_handler)
-
-# Подключение маршрутов v1 с префиксом из настроек
-app.include_router(api_v1_router, prefix=settings.API_V1_PREFIX)
