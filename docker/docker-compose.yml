@@ -1,0 +1,36 @@
+version: '3.8'
+
+# Конфигурация для запуска RealTimeTicker в Docker
+services:
+  api:
+    build:
+      # Контекст сборки — корень проекта (на уровень выше каталога docker/)
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: realtime_ticker_api
+    ports:
+      # Проброс порта: хост:контейнер
+      - "8000:8000"
+    environment:
+      # Внутри сети Docker сервис Redis доступен по имени сервиса "redis"
+      - REDIS_HOST=redis
+      - DEBUG=False
+    depends_on:
+      - redis
+    volumes:
+      # Монтируем исходный код для hot-reload при разработке
+      - ../app:/app/app
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: realtime_ticker_redis
+    ports:
+      # Проброс порта Redis на хост
+      - "6379:6379"
+    volumes:
+      # Постоянное хранилище данных Redis между перезапусками
+      - redis-data:/data
+
+volumes:
+  redis-data:
