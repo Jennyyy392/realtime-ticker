@@ -16,7 +16,7 @@ jobs:
         username: root
         key: ${{ secrets.SSH_PRIVATE_KEY }}
         script: |
-          # 1. Полностью удаляем старую папку
+          # 1. Полностью удаляем старую папку с кодом
           rm -rf ~/realtime-ticker
           
           # 2. Клонируем репозиторий начисто
@@ -25,8 +25,11 @@ jobs:
           # 3. Переходим в папку проекта
           cd ~/realtime-ticker
           
-          # 4. Изолированно останавливаем и удаляем старые контейнеры ТОЛЬКО этого проекта (игнорируем ошибки, если их нет)
+          # 4. ЖЕСТКО удаляем любые контейнеры с этими именами, чтобы исключить конфликты (игнорируем ошибки, если их нет)
+          docker rm -f realtime_ticker_api realtime_ticker_redis || true
+          
+          # 5. Очищаем старые сети и тома этого проекта (на всякий случай)
           docker-compose -p realtime_ticker -f docker/docker-compose.yml down --remove-orphans || true
           
-          # 5. Запускаем сборку и старт с явным указанием имени проекта (это предотвращает конфликт со smartmonitor)
+          # 6. Запускаем сборку и старт с явным указанием имени проекта
           docker-compose -p realtime_ticker -f docker/docker-compose.yml up -d --build
