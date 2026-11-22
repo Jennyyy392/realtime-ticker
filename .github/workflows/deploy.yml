@@ -9,9 +9,6 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
     - name: Deploy to server via SSH
       uses: appleboy/ssh-action@v1.0.3
       with:
@@ -19,18 +16,14 @@ jobs:
         username: root
         key: ${{ secrets.SSH_PRIVATE_KEY }}
         script: |
-          # 1. Переходим в папку или создаем её, если её нет
-          cd ~/realtime-ticker || mkdir ~/realtime-ticker && cd ~/realtime-ticker
+          # 1. Полностью удаляем старую папку, чтобы исключить любые ошибки Git
+          rm -rf ~/realtime-ticker
           
-          # 2. Если это не git-репозиторий, инициализируем его и добавляем origin
-          if [ ! -d ".git" ]; then
-            git init
-            git remote add origin https://github.com/Jennyyy392/realtime-ticker.git
-          fi
+          # 2. Клонируем репозиторий начисто (токен GitHub позволяет клонировать даже приватные репо)
+          git clone https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/Jennyyy392/realtime-ticker.git ~/realtime-ticker
           
-          # 3. Жестко синхронизируем код с GitHub (это предотвращает merge-конфликты на сервере)
-          git fetch origin
-          git reset --hard origin/main
+          # 3. Переходим в папку проекта
+          cd ~/realtime-ticker
           
           # 4. Запускаем Docker (используем docker-compose с дефисом для совместимости с v1.29.2)
           docker-compose -f docker/docker-compose.yml up -d --build
