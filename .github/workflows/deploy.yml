@@ -19,6 +19,18 @@ jobs:
         username: root
         key: ${{ secrets.SSH_PRIVATE_KEY }}
         script: |
-          cd ~/realtime-ticker
-          git pull origin main
-          docker compose -f docker/docker-compose.yml up -d --build
+          # 1. Переходим в папку или создаем её, если её нет
+          cd ~/realtime-ticker || mkdir ~/realtime-ticker && cd ~/realtime-ticker
+          
+          # 2. Если это не git-репозиторий, инициализируем его и добавляем origin
+          if [ ! -d ".git" ]; then
+            git init
+            git remote add origin https://github.com/Jennyyy392/realtime-ticker.git
+          fi
+          
+          # 3. Жестко синхронизируем код с GitHub (это предотвращает merge-конфликты на сервере)
+          git fetch origin
+          git reset --hard origin/main
+          
+          # 4. Запускаем Docker (используем docker-compose с дефисом для совместимости с v1.29.2)
+          docker-compose -f docker/docker-compose.yml up -d --build
