@@ -1,33 +1,27 @@
 version: '3.8'
 
-# Конфигурация для запуска RealTimeTicker в Docker
 services:
   api:
     build:
-      # Контекст сборки — корень проекта (на уровень выше каталога docker/)
       context: ..
       dockerfile: docker/Dockerfile
     container_name: realtime_ticker_api
     ports:
-      # ВАЖНО: порт 8000 уже занят SmartMonitor, используем 8001
-      - "8001:8000"
+      - "8001:8000"  # <--- ВАЖНО: 8001 снаружи, 8000 внутри
     environment:
-      # Внутри сети Docker сервис Redis доступен по имени сервиса "redis"
       - REDIS_HOST=redis
       - DEBUG=False
     depends_on:
       - redis
-    # УБРАЛИ volume для hot-reload — в продакшене он не нужен и может мешать
     restart: unless-stopped
+    # <--- ЗДЕСЬ НЕ ДОЛЖНО БЫТЬ СЕКЦИИ volumes:
 
   redis:
     image: redis:7-alpine
     container_name: realtime_ticker_redis
     ports:
-      # Проброс порта Redis на хост (6379 свободен, конфликта нет)
       - "6379:6379"
     volumes:
-      # Постоянное хранилище данных Redis между перезапусками
       - redis-data:/data
 
 volumes:
