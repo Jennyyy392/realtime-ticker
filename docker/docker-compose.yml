@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   api:
     build:
@@ -12,7 +10,8 @@ services:
       - REDIS_HOST=redis
       - DEBUG=False
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
     restart: unless-stopped
     # <--- ЗДЕСЬ НЕ ДОЛЖНО БЫТЬ СЕКЦИИ volumes:
 
@@ -23,6 +22,11 @@ services:
       - "6379:6379"
     volumes:
       - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
 volumes:
   redis-data:

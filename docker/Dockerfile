@@ -20,5 +20,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Копируем исходный код приложения
 COPY app/ ./app/
 
+# Системный пользователь без пароля + права на /app
+RUN useradd -r -s /usr/sbin/nologin appuser \
+    && chown -R appuser:appuser /app
+USER appuser
+
 # Команда запуска сервера
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

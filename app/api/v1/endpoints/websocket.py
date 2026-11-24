@@ -1,27 +1,20 @@
 """WebSocket-эндпоинт для трансляции цен в реальном времени.
 
-Эндпоинт подписывается на Redis-канал ``price_updates`` и пересылает
-приходящие события подключённому клиенту. Один pubsub-объект создаётся
-на каждое клиентское соединение и обязательно закрывается в ``finally``.
+Эндпоинт не создаёт собственную подписку Redis: он регистрирует
+индивидуальную ``asyncio.Queue`` в общем процессе-``PriceBroadcaster``,
+который держит единственное соединение с Redis Pub/Sub на всех клиентов.
 """
 
 import asyncio
 
-from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, WebSocketException
+from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 
 from app.api.v1.dependencies import check_rate_limit
+from app.config import settings
 from app.core.logger import logger
-from app.redis_client import redis_client
+from app.services.broadcaster import broadcaster
 
 router = APIRouter()
-
-# Канал Redis Pub/Sub, из которого читаем обновления цен.
-# Должен совпадать с каналом, в который публикует воркер.
-PRICE_UPDATES_CHANNEL = "price_updates"
-
-# Таймаут ожидания сообщения из Redis (секунды).
-# Небольшое значение позволяет регулярно проверять состояние клиента.
-MESSAGE_TIMEOUT = 1.0
 
 
 @router.websocket("/ws/prices")
@@ -31,52 +24,52 @@ async def websocket_prices(
 ) -> None:
     """Транслирует обновления цен клиенту через WebSocket."""
     await websocket.accept()
-    logger.info("WebSocket клиент подключён", channel=PRICE_UPDATES_CHANNEL)
-
-    # Отдельная подписка на клиента: свой pubsub и свой набор соединений
-    pubsub = redis_client.pubsub()
-    await pubsub.subscribe(PRICE_UPDATES_CHANNEL)
+    logger.info(
+        "WebSocket клиент подключён", channel=settings.PRICE_UPDATES_CHANNEL
+    )
 
     try:
+        queue = broadcaster.subscribe()
+    except RuntimeError:
+        await websocket.close(code=1013, reason="Server busy")
+        return
+
+    async def receive_loop() -> None:
+        """Ждёт сообщений от клиента и завершается при отключении."""
         while True:
-            # timeout=1.0 не даёт циклу заблокироваться навсегда:
-            # если сообщений нет, вернётся None и мы проверим состояние клиента.
-            message = await pubsub.get_message(
-                ignore_subscribe_messages=True,
-                timeout=MESSAGE_TIMEOUT,
-            )
+            try:
+                message = await websocket.receive()
+            except WebSocketDisconnect:
+                logger.info("WebSocket клиент отключён")
+                return
+            if message.get("type") == "websocket.disconnect":
+                logger.info("WebSocket клиент отключён")
+                return
 
-            if message is None:
-                # Новых сообщений нет — проверяем, не отключился ли клиент.
-                # Короткий poll через receive() перехватывает событие disconnect.
-                try:
-                    client_message = await asyncio.wait_for(
-                        websocket.receive(), timeout=0.01
-                    )
-                except asyncio.TimeoutError:
-                    # Клиент жив, но ничего не прислал — продолжаем ждать обновления
-                    continue
-                if client_message.get("type") == "websocket.disconnect":
-                    logger.info("WebSocket клиент отключён")
-                    break
-                continue
-
-            if message["type"] == "message":
-                data = message["data"]
-                # redis.asyncio создан с decode_responses=True, поэтому data может
-                # быть уже строкой; на случай bytes — декодируем в UTF-8.
-                text = (
-                    data.decode("utf-8")
-                    if isinstance(data, (bytes, bytearray))
-                    else data
-                )
+    async def send_loop() -> None:
+        """Отправляет клиенту сообщения из очереди Broadcaster."""
+        while True:
+            text = await queue.get()
+            try:
                 await websocket.send_text(text)
-    except WebSocketDisconnect:
-        # Клиент отключился в момент отправки
-        logger.info("WebSocket клиент отключён")
+            except WebSocketDisconnect:
+                logger.info("WebSocket клиент отключён при отправке")
+                return
+
+    receive_task = asyncio.create_task(receive_loop(), name="ws-receive")
+    send_task = asyncio.create_task(send_loop(), name="ws-send")
+
+    try:
+        await asyncio.wait(
+            [receive_task, send_task], return_when=asyncio.FIRST_COMPLETED
+        )
+    except asyncio.CancelledError:
+        pass
     finally:
-        # Обязательно отписываемся и закрываем pubsub, иначе соединение
-        # останется висеть в Redis и приведёт к утечке ресурсов
-        await pubsub.unsubscribe(PRICE_UPDATES_CHANNEL)
-        await pubsub.close()
-        logger.info("PubSub подписка закрыта")
+        pending = [receive_task, send_task]
+        for task in pending:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+        broadcaster.unsubscribe(queue)
+        logger.info("Подписка клиента на рассылку закрыта")

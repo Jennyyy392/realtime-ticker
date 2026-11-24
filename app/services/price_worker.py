@@ -12,10 +12,8 @@ import random
 
 import redis.asyncio as redis
 
+from app.config import settings
 from app.core.logger import logger
-
-# Список отслеживаемых монет
-SYMBOLS = ["BTC", "ETH", "SOL", "TON"]
 
 # Базовые (референсные) цены для имитации рыночных колебаний
 BASE_PRICES = {
@@ -25,13 +23,6 @@ BASE_PRICES = {
     "TON": 7.0,
 }
 
-# Канал Redis Pub/Sub, в который публикуются обновления цен.
-# Должен совпадать с каналом, на который подписывается WebSocket-эндпоинт.
-PRICE_UPDATES_CHANNEL = "price_updates"
-
-# Интервал между обновлениями цен в секундах
-UPDATE_INTERVAL = 3
-
 
 async def price_update_worker(redis_client: redis.Redis) -> None:
     """Бесконечный цикл имитации цен с публикацией в Redis.
@@ -40,30 +31,37 @@ async def price_update_worker(redis_client: redis.Redis) -> None:
     затем она сохраняется в Redis (для HTTP-эндпоинтов) и публикуется
     в канал ``price_updates`` (для WebSocket-подписчиков).
     """
-    logger.info("Фоновый воркер цен запущен", symbols=SYMBOLS)
+    logger.info("Фоновый воркер цен запущен", symbols=settings.TRACKED_SYMBOLS)
 
     try:
         while True:
-            for symbol in SYMBOLS:
-                base_price = BASE_PRICES[symbol]
-                # Имитируем рыночное колебание: базовая цена * случайный коэффициент 0.95..1.05
-                price = round(base_price * random.uniform(0.95, 1.05), 2)
+            try:
+                async with redis_client.pipeline(transaction=False) as pipe:
+                    for symbol in settings.TRACKED_SYMBOLS:
+                        base_price = BASE_PRICES.get(symbol, 100.0)
+                        # Имитируем рыночное колебание: базовая цена * случайный коэффициент 0.95..1.05
+                        price = round(base_price * random.uniform(0.95, 1.05), 2)
 
-                # Сохраняем актуальную цену для HTTP-эндпоинтов
-                await redis_client.set(f"price:{symbol}", price)
+                        # Сохраняем актуальную цену для HTTP-эндпоинтов
+                        pipe.set(settings.PRICE_KEY_TEMPLATE.format(symbol=symbol), price)
 
-                # Публикуем событие в канал для WebSocket-подписчиков
-                await redis_client.publish(
-                    PRICE_UPDATES_CHANNEL,
-                    json.dumps({"symbol": symbol, "price": price}),
-                )
+                        # Публикуем событие в канал для WebSocket-подписчиков
+                        pipe.publish(
+                            settings.PRICE_UPDATES_CHANNEL,
+                            json.dumps({"symbol": symbol, "price": price}),
+                        )
+
+                    # Отправляем все команды одной пачкой за один round-trip к Redis
+                    await pipe.execute()
 
                 # Пауза между обновлениями: отдаём управление event loop
-                await asyncio.sleep(UPDATE_INTERVAL)
+                await asyncio.sleep(settings.PRICE_UPDATE_INTERVAL)
+            except Exception as e:
+                # Логируем любую непредвиденную ошибку, чтобы воркер не падал молча
+                logger.error("Ошибка в фоновом воркере цен", error=str(e))
+                # Пауза перед повторной попыткой, чтобы не спамить при сбое Redis
+                await asyncio.sleep(5)
     except asyncio.CancelledError:
         # Штатная остановка воркера при завершении приложения
         logger.info("Фоновый воркер цен остановлен (задача отменена)")
         raise
-    except Exception as e:
-        # Логируем любую непредвиденную ошибку, чтобы воркер не падал молча
-        logger.error("Ошибка в фоновом воркере цен", error=str(e))

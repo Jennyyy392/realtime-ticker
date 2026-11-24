@@ -8,9 +8,10 @@ from fastapi import FastAPI
 
 from app.api.v1.router import router as api_v1_router
 from app.config import settings
-from app.core.exceptions import global_exception_handler
+from app.core.exceptions import SymbolNotFoundError, global_exception_handler, symbol_not_found_handler
 from app.core.logger import logger, setup_logging
 from app.redis_client import redis_client
+from app.services.broadcaster import broadcaster
 from app.services.price_worker import price_update_worker
 
 
@@ -34,20 +35,30 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     worker_task = asyncio.create_task(price_update_worker(redis_client))
     logger.info("Фоновый воркер цен запущен как задача")
 
+    # Единственная на процесс подписка на Redis Pub/Sub: рассылает
+    # сообщения активным WebSocket-клиентам через их asyncio.Queue
+    await broadcaster.start()
+
     yield  # Здесь работает приложение
 
     # Код, который выполняется при ОСТАНОВКЕ приложения
+    await broadcaster.stop()
+
     # Отменяем фоновую задачу и дожидаемся её завершения
     worker_task.cancel()
     try:
         await worker_task
     except asyncio.CancelledError:
         logger.info("Фоновая задача воркера цен отменена")
-        
-# Создание приложения FastAPI
-app = FastAPI(title="RealTimeTicker", debug=settings.DEBUG, lifespan=lifespan)
 
-# Регистрация глобального обработчика всех необработанных исключений
+    # Закрываем пул соединений Redis
+    await redis_client.aclose()
+
+# Создание приложения FastAPI
+app = FastAPI(title=settings.APP_NAME, debug=settings.DEBUG, lifespan=lifespan)
+
+# Регистрация обработчиков исключений
+app.add_exception_handler(SymbolNotFoundError, symbol_not_found_handler)
 app.add_exception_handler(Exception, global_exception_handler)
 
 # Подключение маршрутов v1 с префиксом из настроек
